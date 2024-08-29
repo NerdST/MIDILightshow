@@ -10,8 +10,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.IOException
 import java.io.OutputStream
-import java.io.Serializable
 import java.nio.ByteBuffer
 import java.time.Clock
 import java.time.Instant
@@ -47,12 +47,19 @@ class MIDIPlayer(
         // Reset progress of the player
         t = 0u
         isPlaying = false
+        currentDuration = java.time.Duration.ZERO
+        midiPacketIterator = midiPacketList.listIterator()
+        midiPacketCurrent = midiPacketIterator.next()
     }
 
     var max: ULong = 0u
 
     fun parseMIDIFile ( inputUri: Uri, inputName: String ): MIDIFile? {
         val inputFileStream = context.contentResolver.openInputStream(inputUri)
+
+        val parsedPacketList: ArrayList<MIDIPacket> = arrayListOf()
+        var parsedTickTime = 0.0
+        var parsedMax: ULong = 0u
 
         // Check if file is open
         if ( inputFileStream == null ) {
@@ -65,7 +72,7 @@ class MIDIPlayer(
         var buffer: Byte
         var header = CharArray(4)
 //        midiEventList.clear()
-        midiPacketList.clear()
+        parsedPacketList.clear()
 
         /*--------------------------------------------------------------------------------------*/
         /*                                  Parsing the Header                                  */
@@ -188,9 +195,9 @@ class MIDIPlayer(
                             i += buffer.toInt()
                             tempo = ByteBuffer.wrap(buffer4).getInt()
                             tempo = tempo shr 8
-                            tickTime = tempo.toDouble() / tpb.toDouble() / 1000.0
+                            parsedTickTime = tempo.toDouble() / tpb.toDouble() / 1000.0
 //                            tickDelayNanos = Duration.ofNanos((tickTime * 1000000).toLong())
-                            tickDelayNanos = (tickTime * 1000000.0).toLong().nanoseconds
+                            tickDelayNanos = (parsedTickTime * 1000000.0).toLong().nanoseconds
 //                            Toast.makeText(context, tickDelayNanos.toString(), Toast.LENGTH_SHORT).show()
 
                         }
@@ -243,15 +250,15 @@ class MIDIPlayer(
                             val noteVelocity = ( buffer.toInt() shl 1 ).toByte()
 
                             // Create a new entry if there isn't one at the current timestamp
-                            if ( !(midiPacketList.any { it.t == time }) ) {
-                                midiPacketList.plusAssign(MIDIPacket(time, "P", byteArrayOf('P'.code.toByte())))
+                            if ( !(parsedPacketList.any { it.t == time }) ) {
+                                parsedPacketList.plusAssign(MIDIPacket(time, "P", byteArrayOf('P'.code.toByte())))
                             }
 
-                            val packetIndex = midiPacketList.indexOfFirst { it.t == time }
-                            midiPacketList[packetIndex].packetString += "S" + trackChannel +
+                            val packetIndex = parsedPacketList.indexOfFirst { it.t == time }
+                            parsedPacketList[packetIndex].packetString += "S" + trackChannel +
                                     "%02X".format(noteName.toInt()) +
                                     "%02X".format(noteVelocity.toInt())
-                            midiPacketList[packetIndex].packetData += byteArrayOf(
+                            parsedPacketList[packetIndex].packetData += byteArrayOf(
                                 'S'.code.toByte(), trackChannel.toByte(), noteName, noteVelocity)
 
 //                            midiEventList.plusAssign(MIDIEvent(time, trackChannel, MIDI_EVENTS.NOTE_ON, noteName.toInt(), noteVelocity.toInt()))
@@ -266,15 +273,15 @@ class MIDIPlayer(
                             val noteVelocity = ( buffer.toInt() shl 1 ).toByte()
 
                             // Create a new entry if there isn't one at the current timestamp
-                            if ( !(midiPacketList.any { it.t == time }) ) {
-                                midiPacketList.plusAssign(MIDIPacket(time, "P", byteArrayOf('P'.code.toByte())))
+                            if ( !(parsedPacketList.any { it.t == time }) ) {
+                                parsedPacketList.plusAssign(MIDIPacket(time, "P", byteArrayOf('P'.code.toByte())))
                             }
 
                             if ( trackChannel == 1 ) {
-                                val packetIndex = midiPacketList.indexOfFirst { it.t == time }
-                                midiPacketList[packetIndex].packetString += "S" + trackChannel +
+                                val packetIndex = parsedPacketList.indexOfFirst { it.t == time }
+                                parsedPacketList[packetIndex].packetString += "S" + trackChannel +
                                         "%02X".format(noteName.toInt()) + "00"
-                                midiPacketList[packetIndex].packetData += byteArrayOf(
+                                parsedPacketList[packetIndex].packetData += byteArrayOf(
                                     'S'.code.toByte(), trackChannel.toByte(), noteName, 0)
                             }
 
@@ -296,8 +303,8 @@ class MIDIPlayer(
                             i += 2
                         }
                     }
-                    if ( max < time ) {
-                        max = time
+                    if ( parsedMax < time ) {
+                        parsedMax = time
                     }
                 }
             }
@@ -312,15 +319,15 @@ class MIDIPlayer(
 
         inputFileStream.close()
 //        midiEventList.sortBy { it.t }
-        midiPacketList.sortBy { it.t }
-        t = 0u
-        currentDuration = java.time.Duration.ZERO
+        parsedPacketList.sortBy { it.t }
+//        t = 0u
+//        currentDuration = java.time.Duration.ZERO
 //        midiEventIterator = midiEventList.listIterator()
 //        midiEventCurrent = midiEventIterator.next()
-        midiPacketIterator = midiPacketList.listIterator()
-        midiPacketCurrent = midiPacketIterator.next()
+//        midiPacketIterator = midiPacketList.listIterator()
+//        midiPacketCurrent = midiPacketIterator.next()
 
-        return MIDIFile(context, inputName, inputUri, midiPacketList, tickTime, max)
+        return MIDIFile(inputName, inputUri.toString(), parsedPacketList, parsedTickTime, parsedMax)
     }
 
     // All the player related stuff
@@ -351,6 +358,8 @@ class MIDIPlayer(
 
     private fun startPlaying() {
         startInstant = clock.instant()
+
+        if ( midiPacketList.size == 0 ) return
 
         job = playerScope.launch {
             while ( isPlaying ) {
@@ -405,9 +414,9 @@ class MIDIPlayer(
     private fun sendBTMessage ( message: ByteArray ) {
         var msg: ByteArray = message
         msg += '\n'.code.toByte()
-        if ( mOutputStream != null ) {
-            mOutputStream!!.write(msg)
-        }
+        try {
+            if ( mOutputStream != null ) mOutputStream!!.write(msg)
+        } catch (e: IOException) {  }
     }
 
     private fun updateIterator() {

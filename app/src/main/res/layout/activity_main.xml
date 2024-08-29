@@ -3,7 +3,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/sendButton"
-    android:layout_width="match_parent"
+    android:layout_width="fill_parent"
     android:layout_height="match_parent"
     tools:context=".MainActivity">
 
@@ -31,18 +31,19 @@
             android:id="@+id/textView_fileName"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="TextView" />
+            android:text="No Song Loaded" />
 
         <TextView
-            android:id="@+id/textView_CurrentlyPlaying"
+            android:id="@+id/textView_progress"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="TextView" />
+            android:text="0" />
 
         <SeekBar
-            android:id="@+id/seekBar"
+            android:id="@+id/seekBar_songProgress"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content" />
+            android:layout_height="wrap_content"
+            android:rotation="2" />
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -96,7 +97,7 @@
             android:id="@+id/myLabel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="TextView" />
+            android:text="Awaiting BT Status" />
 
         <Button
             android:id="@+id/pairButton"
@@ -115,7 +116,25 @@
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/rv_list_midifiles"
             android:layout_width="match_parent"
-            android:layout_height="match_parent" />
+            android:layout_height="match_parent"
+            android:layout_weight="1" />
+
+        <TextView
+            android:id="@+id/textView_Brightness"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Brightness" />
+
+        <SeekBar
+            android:id="@+id/seekBar_Brightness"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="255"
+            android:progress="196" />
+
+        <Space
+            android:layout_width="match_parent"
+            android:layout_height="@android:dimen/notification_large_icon_width" />
 
     </LinearLayout>
 </androidx.constraintlayout.widget.ConstraintLayout>

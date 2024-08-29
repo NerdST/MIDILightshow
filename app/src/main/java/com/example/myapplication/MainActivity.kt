@@ -6,6 +6,7 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.database.Cursor
 import android.net.Uri
@@ -13,6 +14,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.provider.OpenableColumns
+import android.util.Base64
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.ViewGroup
@@ -25,10 +27,14 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.myapplication.databinding.ActivityMainBinding
 import com.example.myapplication.databinding.RecyclerviewSingleItemBinding
+import kotlinx.serialization.json.Json
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
+import java.io.ObjectInputStream
+import java.io.ObjectOutputStream
 import java.io.OutputStream
-import java.io.Serializable
 import java.util.UUID
 
 @RequiresApi(Build.VERSION_CODES.O)
@@ -38,6 +44,12 @@ class MainActivity : AppCompatActivity() {
     
     private lateinit var midiRvAdapter: FileListAdapter
     private lateinit var midiFileList: ArrayList<MIDIFile>
+
+    companion object {
+        private const val MIDI_FILE_LIST_KEY = "midi_file_list"
+    }
+
+    private lateinit var sharedPreferences: SharedPreferences
 
     private lateinit var bluetoothAdapter: BluetoothAdapter
     private lateinit var bluetoothSocket: BluetoothSocket
@@ -59,10 +71,12 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        sharedPreferences = getSharedPreferences("my_app_prefs", Context.MODE_PRIVATE)
+
+        midiFileList = loadMIDIFileList()
+
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
-
-        midiFileList = ArrayList()
 
         // All the recyclerView stuff
         val midiLayoutManager: RecyclerView.LayoutManager = LinearLayoutManager ( this )
@@ -70,10 +84,10 @@ class MainActivity : AppCompatActivity() {
         midiRvAdapter = FileListAdapter ( this, midiFileList, midiPlayer, binding )
         binding.rvListMidifiles.adapter = midiRvAdapter
 
-        binding.seekBar.max = 0
-        binding.seekBar.progress = midiPlayer.t.toInt()
+        binding.seekBarSongProgress.max = 0
+        binding.seekBarSongProgress.progress = midiPlayer.t.toInt()
 
-        binding.seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+        binding.seekBarSongProgress.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (fromUser) {
                     midiPlayer.t = progress.toULong()
@@ -81,7 +95,7 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 // Update the Text whenever Progress Bar Changes
-                binding.textViewCurrentlyPlaying.text = midiPlayer.t.toString()
+                binding.textViewProgress.text = midiPlayer.t.toString()
             }
 
             override fun onStartTrackingTouch(seekBar: SeekBar?) {
@@ -95,8 +109,27 @@ class MainActivity : AppCompatActivity() {
 
         // Update SeekBar when MIDIPlayer value changes
         midiPlayer.onValueChanged = { newValue ->
-            binding.seekBar.progress = newValue.toInt()
+            binding.seekBarSongProgress.progress = newValue.toInt()
         }
+
+        // Update
+        binding.seekBarBrightness.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(p0: SeekBar?, p1: Int, p2: Boolean) {
+                if (p2) {
+                    val sendVal: UByte = p1.toUByte()
+                    val sendArray: ByteArray = byteArrayOf('B'.code.toByte(), p1.toByte())
+                    sendData(sendArray)
+                }
+            }
+
+            override fun onStartTrackingTouch(p0: SeekBar?) {
+
+            }
+
+            override fun onStopTrackingTouch(p0: SeekBar?) {
+
+            }
+        })
 
         // Toggle isPlaying on button click
         binding.playButton.setOnClickListener {
@@ -125,7 +158,26 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Example of a call to a native method
-        binding.textViewCurrentlyPlaying.text = binding.seekBar.progress.toString()
+        binding.textViewProgress.text = binding.seekBarSongProgress.progress.toString()
+
+        midiRvAdapter.notifyDataSetChanged()
+    }
+
+    fun saveMIDIFileList(midiFileList: ArrayList<MIDIFile>) {
+        val editor = sharedPreferences.edit()
+        val serializedList = midiFileList.map { Json.encodeToString(MIDIFile.serializer(), it) }
+        editor.putStringSet(MIDI_FILE_LIST_KEY, serializedList.toSet())
+        editor.apply()
+    }
+
+    private fun loadMIDIFileList(): ArrayList<MIDIFile> {
+        val midiFileList = ArrayList<MIDIFile>()
+        val serializedList = sharedPreferences.getStringSet(MIDI_FILE_LIST_KEY, null) ?: emptySet()
+        for (serializedString in serializedList) {
+            val midiFile = Json.decodeFromString<MIDIFile>(serializedString)
+            midiFileList.add(midiFile)
+        }
+        return midiFileList
     }
 
     private val requestPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -239,10 +291,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     @Throws(IOException::class)
-    fun sendData( messageString: String ) {
-        var msg: String = messageString
-        msg += "\n"
-        mmOutputStream!!.write(msg.toByteArray())
+    fun sendData( message: ByteArray ) {
+        var msg: ByteArray = message
+        msg += '\n'.code.toByte()
+        try {
+            if ( mmOutputStream != null ) mmOutputStream!!.write(msg)
+        } catch (e: IOException) { }
     }
 
     @Throws(IOException::class)
@@ -287,6 +341,7 @@ class MainActivity : AppCompatActivity() {
             }
 
 //            midiPlayer.loadMIDIFile(uri)
+            saveMIDIFileList(midiFileList)
         }
 
         // Set the FileName text to the filename
@@ -301,14 +356,14 @@ class MainActivity : AppCompatActivity() {
      * A native method that is implemented by the 'myapplication' native library,
      * which is packaged with this application.
      */
-    external fun stringFromJNI(): String
-
-    companion object {
-        // Used to load the 'myapplication' library on application startup.
-        init {
-            System.loadLibrary("myapplication")
-        }
-    }
+//    external fun stringFromJNI(): String
+//
+//    companion object {
+//        // Used to load the 'myapplication' library on application startup.
+//        init {
+//            System.loadLibrary("myapplication")
+//        }
+//    }
 }
 
 @RequiresApi(Build.VERSION_CODES.O)
@@ -331,7 +386,7 @@ class FileListAdapter(
             with ( rvFileList[position] ) {
                 binding.textViewFilename.text = this.name
                 binding.imageButtonUpload.setOnClickListener {
-                    if ( this.uri != null ) {
+                    if ( this.uriString != null ) {
 //                        val loadedMIDIFile = this.name?.let { it1 ->
 //                            deserializeAndLoad(context,
 //                                it1
@@ -341,7 +396,16 @@ class FileListAdapter(
 //                            midiPlayer.loadMIDIFile(loadedMIDIFile)
 //                        }
                         midiPlayer.loadMIDIFile(this)
-                        mainBinding.seekBar.max = midiPlayer.max.toInt()
+                        mainBinding.seekBarSongProgress.max = midiPlayer.max.toInt()
+                        mainBinding.textViewFileName.text = this.name
+                    }
+                }
+
+                binding.imageButtonDelete.setOnClickListener {
+                    if ( this.uriString != null ) {
+                        rvFileList.remove(this)
+                        (context as MainActivity).saveMIDIFileList(rvFileList)
+                        notifyDataSetChanged()
                     }
                 }
             }
