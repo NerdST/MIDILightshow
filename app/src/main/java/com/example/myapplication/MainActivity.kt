@@ -28,6 +28,7 @@ import com.example.myapplication.databinding.RecyclerviewSingleItemBinding
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.io.Serializable
 import java.util.UUID
 
 @RequiresApi(Build.VERSION_CODES.O)
@@ -278,12 +279,18 @@ class MainActivity : AppCompatActivity() {
                 fileName = cursor.getString(displayNameIndex)
             }
 //            copyFileToInternalStorage(uri, fileName)
-            midiFileList.plusAssign(MIDIFile(fileName, uri))
-            midiRvAdapter.notifyDataSetChanged()
+            val parsedFile = midiPlayer.parseMIDIFile(uri, fileName)
+            if ( parsedFile != null ){
+//                serializeAndSave(this,fileName,parsedFile)
+                midiFileList.plusAssign(parsedFile)
+                midiRvAdapter.notifyDataSetChanged()
+            }
+
+//            midiPlayer.loadMIDIFile(uri)
         }
 
         // Set the FileName text to the filename
-        binding.textViewFileName.text = fileName
+//        binding.textViewFileName.text = fileName
     }
 
 
@@ -325,7 +332,15 @@ class FileListAdapter(
                 binding.textViewFilename.text = this.name
                 binding.imageButtonUpload.setOnClickListener {
                     if ( this.uri != null ) {
-                        midiPlayer.loadMIDIFile(this.uri)
+//                        val loadedMIDIFile = this.name?.let { it1 ->
+//                            deserializeAndLoad(context,
+//                                it1
+//                            )
+//                        }
+//                        if (loadedMIDIFile != null) {
+//                            midiPlayer.loadMIDIFile(loadedMIDIFile)
+//                        }
+                        midiPlayer.loadMIDIFile(this)
                         mainBinding.seekBar.max = midiPlayer.max.toInt()
                     }
                 }

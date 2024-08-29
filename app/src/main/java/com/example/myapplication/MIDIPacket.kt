@@ -1,8 +1,12 @@
 package com.example.myapplication
 
-class MIDIPacket (
+import kotlinx.serialization.Serializable
+
+@Serializable
+data class MIDIPacket (
     val t: ULong,
     var packetString: String,
     var packetData: ByteArray
 ) {
+
 }

@@ -3,7 +3,6 @@ package com.example.myapplication
 import android.content.Context
 import android.net.Uri
 import android.os.Build
-import android.util.Log
 import android.widget.Toast
 import androidx.annotation.RequiresApi
 import kotlinx.coroutines.CoroutineScope
@@ -12,6 +11,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.OutputStream
+import java.io.Serializable
 import java.nio.ByteBuffer
 import java.time.Clock
 import java.time.Instant
@@ -19,12 +19,10 @@ import kotlin.math.pow
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.nanoseconds
 
-
 @RequiresApi(Build.VERSION_CODES.O)
 class MIDIPlayer(
     inputContext: Context,
 ) {
-    private var loadedMIDIFile = MIDIFile()
     private val context = inputContext
     private var tickTime: Double = 1.0
     private var tickDelayNanos: Duration = Duration.ZERO
@@ -40,19 +38,26 @@ class MIDIPlayer(
     private var midiPacketCurrent: MIDIPacket? = null
     var mOutputStream: OutputStream? = null
 
-    fun loadMIDIFile (inputUri: Uri ) {
-        parseMIDIFile(inputUri)
+    fun loadMIDIFile (inputMIDIFile: MIDIFile) {
+        midiPacketList = inputMIDIFile.list
+        tickTime = inputMIDIFile.delay
+        tickDelayNanos = (tickTime * 1000000.0).toLong().nanoseconds
+        max = inputMIDIFile.max
+
+        // Reset progress of the player
+        t = 0u
+        isPlaying = false
     }
 
     var max: ULong = 0u
 
-    private fun parseMIDIFile (inputUri: Uri ) {
+    fun parseMIDIFile ( inputUri: Uri, inputName: String ): MIDIFile? {
         val inputFileStream = context.contentResolver.openInputStream(inputUri)
 
         // Check if file is open
         if ( inputFileStream == null ) {
             Toast.makeText(context, "Error: Could not open file", Toast.LENGTH_SHORT).show()
-            return
+            return null
         }
 
         val buffer4 = ByteArray(4)
@@ -72,7 +77,7 @@ class MIDIPlayer(
         // Check if it's correct
         if ( buffer4[0] != 'M'.toByte() || buffer4[1] != 'T'.toByte() || buffer4[2] != 'h'.toByte() || buffer4[3] != 'd'.toByte() ) {
             Toast.makeText(context, "Error: Invalid Header", Toast.LENGTH_SHORT).show()
-            return
+            return null
         }
 
 
@@ -82,7 +87,7 @@ class MIDIPlayer(
 
         if (length != 6) {
             Toast.makeText(context, "Error: Header Size Mismatch", Toast.LENGTH_SHORT).show()
-            return
+            return null
         }
 
         // Read in the format
@@ -90,7 +95,7 @@ class MIDIPlayer(
         var format: Int = ByteBuffer.wrap(buffer2).getShort().toInt()
         if (format != 0 && format != 1 && format != 2) {
             Toast.makeText(context, "Error: Invalid File Format", Toast.LENGTH_SHORT).show()
-            return
+            return null
         }
 
         // Read in the number of tracks
@@ -104,7 +109,7 @@ class MIDIPlayer(
         // Check if time division is positive
         if (tpb < 0) {
             Toast.makeText(context, "Error: Invalid TPB", Toast.LENGTH_SHORT).show()
-            return
+            return null
         }
 //        else {
 //            Toast.makeText(context, "YIPPIE", Toast.LENGTH_SHORT).show()
@@ -129,7 +134,7 @@ class MIDIPlayer(
             // Check if its correct
             if ( buffer4[0] != 'M'.toByte() || buffer4[1] != 'T'.toByte() || buffer4[2] != 'r'.toByte() || buffer4[3] != 'k'.toByte() ) {
                 Toast.makeText(context, "Error: Invalid Header", Toast.LENGTH_SHORT).show()
-                return
+                return null
             }
 
             // Print out the track number
@@ -175,7 +180,7 @@ class MIDIPlayer(
                             // See if that's correct
                             if ( buffer.toInt() != 3 ) {
                                 Toast.makeText(context, "Error: Invalid Tempo Argument", Toast.LENGTH_SHORT).show()
-                                return
+                                return null
                             }
 
                             // Read in the data
@@ -186,7 +191,7 @@ class MIDIPlayer(
                             tickTime = tempo.toDouble() / tpb.toDouble() / 1000.0
 //                            tickDelayNanos = Duration.ofNanos((tickTime * 1000000).toLong())
                             tickDelayNanos = (tickTime * 1000000.0).toLong().nanoseconds
-                            Toast.makeText(context, tickDelayNanos.toString(), Toast.LENGTH_SHORT).show()
+//                            Toast.makeText(context, tickDelayNanos.toString(), Toast.LENGTH_SHORT).show()
 
                         }
                         META_EVENTS.TIME_SIGNATURE.v -> {
@@ -195,7 +200,7 @@ class MIDIPlayer(
 
                             if ( buffer.toInt() != 4 ) {
                                 Toast.makeText(context, "Error: Invalid Time Signature", Toast.LENGTH_SHORT).show()
-                                return
+                                return null
                             }
 
                             inputFileStream.read(buffer4,0,buffer.toInt())
@@ -299,7 +304,7 @@ class MIDIPlayer(
 
             if ( !eotReached ) {
                 Toast.makeText(context, "Error: EOT not reached", Toast.LENGTH_SHORT).show()
-                return
+                return null
             }
 
             currentTrack++
@@ -315,7 +320,7 @@ class MIDIPlayer(
         midiPacketIterator = midiPacketList.listIterator()
         midiPacketCurrent = midiPacketIterator.next()
 
-        return
+        return MIDIFile(context, inputName, inputUri, midiPacketList, tickTime, max)
     }
 
     // All the player related stuff
