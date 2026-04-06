@@ -1,6 +1,7 @@
 package com.example.myapplication
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
@@ -17,6 +18,7 @@ import android.provider.OpenableColumns
 import android.util.Base64
 import android.util.Log
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.ViewGroup
 import android.widget.SeekBar
 import androidx.activity.result.contract.ActivityResultContracts
@@ -68,6 +70,7 @@ class MainActivity : AppCompatActivity() {
     @Volatile
     var stopWorker: Boolean = false
 
+    @SuppressLint("ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -155,6 +158,81 @@ class MainActivity : AppCompatActivity() {
             try {
                 closeBT()
             } catch ( exception: IOException ) { }
+        }
+
+        // Fast Forward Button
+        binding.imageButtonFF1.setOnTouchListener { _, event ->
+            when ( event.action ) {
+                MotionEvent.ACTION_DOWN -> {
+                    midiPlayer.tickTimeMultiplier = 1.5
+                    midiPlayer.isPlaying = !midiPlayer.isPlaying
+                    midiPlayer.isPlaying = !midiPlayer.isPlaying
+                }
+                MotionEvent.ACTION_UP -> {
+                    midiPlayer.tickTimeMultiplier = 1.0
+                    midiPlayer.isPlaying = !midiPlayer.isPlaying
+                    midiPlayer.isPlaying = !midiPlayer.isPlaying
+                }
+            }
+            true
+        }
+
+        // Fast Forward Button 2
+        binding.imageButtonFF2.setOnTouchListener { _, event ->
+            when ( event.action ) {
+                MotionEvent.ACTION_DOWN -> {
+                    midiPlayer.tickTimeMultiplier = 2.0
+                    midiPlayer.isPlaying = !midiPlayer.isPlaying
+                    midiPlayer.isPlaying = !midiPlayer.isPlaying
+                }
+                MotionEvent.ACTION_UP -> {
+                    midiPlayer.tickTimeMultiplier = 1.0
+                    midiPlayer.isPlaying = !midiPlayer.isPlaying
+                    midiPlayer.isPlaying = !midiPlayer.isPlaying
+                }
+            }
+            true
+        }
+
+        // Slow Forward Button
+        binding.imageButtonSS1.setOnTouchListener { _, event ->
+            when ( event.action ) {
+                MotionEvent.ACTION_DOWN -> {
+                    midiPlayer.tickTimeMultiplier = 0.75
+                    midiPlayer.isPlaying = !midiPlayer.isPlaying
+                    midiPlayer.isPlaying = !midiPlayer.isPlaying
+                }
+                MotionEvent.ACTION_UP -> {
+                    midiPlayer.tickTimeMultiplier = 1.0
+                    midiPlayer.isPlaying = !midiPlayer.isPlaying
+                    midiPlayer.isPlaying = !midiPlayer.isPlaying
+                }
+            }
+            true
+        }
+
+        // Slow Forward Button 2
+        binding.imageButtonSS2.setOnTouchListener { _, event ->
+            when ( event.action ) {
+                MotionEvent.ACTION_DOWN -> {
+                    midiPlayer.tickTimeMultiplier = 0.5
+                    midiPlayer.isPlaying = !midiPlayer.isPlaying
+                    midiPlayer.isPlaying = !midiPlayer.isPlaying
+                }
+                MotionEvent.ACTION_UP -> {
+                    midiPlayer.tickTimeMultiplier = 1.0
+                    midiPlayer.isPlaying = !midiPlayer.isPlaying
+                    midiPlayer.isPlaying = !midiPlayer.isPlaying
+                }
+            }
+            true
+        }
+
+        // Loop Button
+        binding.imageButtonLoop.setOnClickListener {
+            midiPlayer.isLooping = !midiPlayer.isLooping
+            if ( midiPlayer.isLooping ) binding.textViewLooping.text = "Looping"
+            else binding.textViewLooping.text = "Not Looping"
         }
 
         // Example of a call to a native method
@@ -296,6 +374,7 @@ class MainActivity : AppCompatActivity() {
         msg += '\n'.code.toByte()
         try {
             if ( mmOutputStream != null ) mmOutputStream!!.write(msg)
+            Log.i("BRIGHTNESS CHANGE", msg.toString(Charsets.UTF_8))
         } catch (e: IOException) { }
     }
 

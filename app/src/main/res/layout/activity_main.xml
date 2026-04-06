@@ -33,17 +33,31 @@
             android:layout_height="wrap_content"
             android:text="No Song Loaded" />
 
-        <TextView
-            android:id="@+id/textView_progress"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="0" />
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/textView_progress"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0" />
+
+            <TextView
+                android:id="@+id/textView_looping"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Not Looping"
+                android:textAlignment="textEnd" />
+        </LinearLayout>
 
         <SeekBar
             android:id="@+id/seekBar_songProgress"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:rotation="2" />
+            android:rotation="0" />
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -51,14 +65,14 @@
             android:orientation="horizontal">
 
             <ImageButton
-                android:id="@+id/imageButton5"
+                android:id="@+id/imageButton_SS2"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:src="@android:drawable/ic_media_previous" />
 
             <ImageButton
-                android:id="@+id/imageButton4"
+                android:id="@+id/imageButton_SS1"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
@@ -72,18 +86,25 @@
                 android:src="@android:drawable/ic_media_play" />
 
             <ImageButton
-                android:id="@+id/imageButton2"
+                android:id="@+id/imageButton_FF1"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:src="@android:drawable/ic_media_ff" />
 
             <ImageButton
-                android:id="@+id/imageButton3"
+                android:id="@+id/imageButton_FF2"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:src="@android:drawable/ic_media_next" />
+
+            <ImageButton
+                android:id="@+id/imageButton_loop"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                app:srcCompat="@android:drawable/ic_menu_revert" />
         </LinearLayout>
 
         <Button

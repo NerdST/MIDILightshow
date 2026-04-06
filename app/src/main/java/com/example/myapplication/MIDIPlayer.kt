@@ -3,6 +3,7 @@ package com.example.myapplication
 import android.content.Context
 import android.net.Uri
 import android.os.Build
+import android.util.Log
 import android.widget.Toast
 import androidx.annotation.RequiresApi
 import kotlinx.coroutines.CoroutineScope
@@ -15,8 +16,8 @@ import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.time.Clock
 import java.time.Instant
+import java.time.Duration
 import kotlin.math.pow
-import kotlin.time.Duration
 import kotlin.time.Duration.Companion.nanoseconds
 
 @RequiresApi(Build.VERSION_CODES.O)
@@ -25,6 +26,8 @@ class MIDIPlayer(
 ) {
     private val context = inputContext
     private var tickTime: Double = 1.0
+    private var tickTimeRaw: Double = 1.0
+    var tickTimeMultiplier: Double = 1.0
     private var tickDelayNanos: Duration = Duration.ZERO
     private var currentDuration: java.time.Duration = java.time.Duration.ZERO
     private var job: Job? = null
@@ -41,7 +44,7 @@ class MIDIPlayer(
     fun loadMIDIFile (inputMIDIFile: MIDIFile) {
         midiPacketList = inputMIDIFile.list
         tickTime = inputMIDIFile.delay
-        tickDelayNanos = (tickTime * 1000000.0).toLong().nanoseconds
+//        tickDelayNanos = (tickTime * 1000000.0).toLong().nanoseconds
         max = inputMIDIFile.max
 
         // Reset progress of the player
@@ -197,7 +200,7 @@ class MIDIPlayer(
                             tempo = tempo shr 8
                             parsedTickTime = tempo.toDouble() / tpb.toDouble() / 1000.0
 //                            tickDelayNanos = Duration.ofNanos((tickTime * 1000000).toLong())
-                            tickDelayNanos = (parsedTickTime * 1000000.0).toLong().nanoseconds
+//                            tickDelayNanos = (parsedTickTime * 1000000.0).toLong().nanoseconds
 //                            Toast.makeText(context, tickDelayNanos.toString(), Toast.LENGTH_SHORT).show()
 
                         }
@@ -251,7 +254,7 @@ class MIDIPlayer(
 
                             // Create a new entry if there isn't one at the current timestamp
                             if ( !(parsedPacketList.any { it.t == time }) ) {
-                                parsedPacketList.plusAssign(MIDIPacket(time, "P", byteArrayOf('P'.code.toByte())))
+                                parsedPacketList.plusAssign(MIDIPacket(time, "", byteArrayOf()))
                             }
 
                             val packetIndex = parsedPacketList.indexOfFirst { it.t == time }
@@ -274,7 +277,7 @@ class MIDIPlayer(
 
                             // Create a new entry if there isn't one at the current timestamp
                             if ( !(parsedPacketList.any { it.t == time }) ) {
-                                parsedPacketList.plusAssign(MIDIPacket(time, "P", byteArrayOf('P'.code.toByte())))
+                                parsedPacketList.plusAssign(MIDIPacket(time, "", byteArrayOf()))
                             }
 
                             if ( trackChannel == 1 ) {
@@ -349,6 +352,8 @@ class MIDIPlayer(
             }
         }
 
+    var isLooping: Boolean = false
+
     private var clock: Clock = Clock.systemDefaultZone()
     private var startInstant: Instant = clock.instant() // or Instant.now();
     private var elapsedTime: java.time.Duration = java.time.Duration.ZERO
@@ -362,18 +367,31 @@ class MIDIPlayer(
         if ( midiPacketList.size == 0 ) return
 
         job = playerScope.launch {
-            while ( isPlaying ) {
-                elapsedTime = java.time.Duration.between(startInstant, clock.instant())
+            while ( true ) {
+                elapsedTime = Duration.between(startInstant, clock.instant())
+                val sNanos = ( elapsedTime.toNanos().toDouble() * tickTimeMultiplier ).toLong()
+                elapsedTime = Duration.ofNanos(sNanos)
                 s = elapsedTime.seconds.toDouble() + (elapsedTime.nano.toDouble() / 10.0.pow(9))
                 s += currentDuration.seconds.toDouble() + (currentDuration.nano.toDouble() / 10.0.pow(9))
                 t = (s / ( tickTime / 1000.0 )).toULong()
 //                Log.i("BREAKRJ#I", t.toString())
                 updateIterator()
-                if ( t >= max ) isPlaying = false
+                if ( t >= max ) break
                 delay ( 1 )
             }
             currentDuration += elapsedTime
-            job?.cancel()
+
+            // Looping logic
+            if (isLooping) {
+                t = 0u
+                currentDuration = java.time.Duration.ZERO
+                elapsedTime = currentDuration
+                midiPacketIterator = midiPacketList.listIterator()
+                midiPacketCurrent = midiPacketIterator.next()
+                isPlaying = true
+            } else {
+                isPlaying = false
+            }
         }
 
 //        job?.cancel()
@@ -416,6 +434,7 @@ class MIDIPlayer(
         msg += '\n'.code.toByte()
         try {
             if ( mOutputStream != null ) mOutputStream!!.write(msg)
+            Log.i("SONG EVENT", msg.toString(Charsets.UTF_8))
         } catch (e: IOException) {  }
     }
 
