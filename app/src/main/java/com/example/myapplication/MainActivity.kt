@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.content.Intent
@@ -14,8 +15,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
+import android.os.Looper
 import android.provider.OpenableColumns
-import android.util.Base64
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -25,17 +26,18 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.myapplication.databinding.ActivityMainBinding
 import com.example.myapplication.databinding.RecyclerviewSingleItemBinding
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
-import java.io.ObjectInputStream
-import java.io.ObjectOutputStream
 import java.io.OutputStream
 import java.util.UUID
 
@@ -43,7 +45,7 @@ import java.util.UUID
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
-    
+
     private lateinit var midiRvAdapter: FileListAdapter
     private lateinit var midiFileList: ArrayList<MIDIFile>
 
@@ -52,7 +54,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private lateinit var sharedPreferences: SharedPreferences
-
     private lateinit var bluetoothAdapter: BluetoothAdapter
     private lateinit var bluetoothSocket: BluetoothSocket
     private lateinit var bluetoothDevice: BluetoothDevice
@@ -60,7 +61,7 @@ class MainActivity : AppCompatActivity() {
     private var mmOutputStream: OutputStream? = null
     private var mmInputStream: InputStream? = null
 
-    private val midiPlayer = MIDIPlayer (this)
+    private val midiPlayer = MIDIPlayer(this)
 
     private var workerThread: Thread? = null
     private lateinit var readBuffer: ByteArray
@@ -75,16 +76,14 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
 
         sharedPreferences = getSharedPreferences("my_app_prefs", Context.MODE_PRIVATE)
-
         midiFileList = loadMIDIFileList()
 
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // All the recyclerView stuff
-        val midiLayoutManager: RecyclerView.LayoutManager = LinearLayoutManager ( this )
+        val midiLayoutManager: RecyclerView.LayoutManager = LinearLayoutManager(this)
         binding.rvListMidifiles.layoutManager = midiLayoutManager
-        midiRvAdapter = FileListAdapter ( this, midiFileList, midiPlayer, binding )
+        midiRvAdapter = FileListAdapter(this, midiFileList, midiPlayer, binding)
         binding.rvListMidifiles.adapter = midiRvAdapter
 
         binding.seekBarSongProgress.max = 0
@@ -96,223 +95,156 @@ class MainActivity : AppCompatActivity() {
                     midiPlayer.t = progress.toULong()
                     midiPlayer.updateIteratorFromBeginning()
                 }
-
-                // Update the Text whenever Progress Bar Changes
                 binding.textViewProgress.text = midiPlayer.t.toString()
             }
-
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {
-                // Do nothing
-            }
-
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                // Do nothing
-            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
 
-        // Update SeekBar when MIDIPlayer value changes
         midiPlayer.onValueChanged = { newValue ->
+            // onValueChanged is already dispatched to main thread by MIDIPlayer
             binding.seekBarSongProgress.progress = newValue.toInt()
         }
 
-        // Update
         binding.seekBarBrightness.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(p0: SeekBar?, p1: Int, p2: Boolean) {
-                if (p2) {
-                    val sendVal: UByte = p1.toUByte()
-                    val sendArray: ByteArray = byteArrayOf('B'.code.toByte(), p1.toByte())
-                    sendData(sendArray)
-                }
+                if (p2) sendData(byteArrayOf('B'.code.toByte(), p1.toByte()))
             }
-
-            override fun onStartTrackingTouch(p0: SeekBar?) {
-
-            }
-
-            override fun onStopTrackingTouch(p0: SeekBar?) {
-
-            }
+            override fun onStartTrackingTouch(p0: SeekBar?) {}
+            override fun onStopTrackingTouch(p0: SeekBar?) {}
         })
 
-        // Toggle isPlaying on button click
         binding.playButton.setOnClickListener {
             midiPlayer.isPlaying = !midiPlayer.isPlaying
             updateButtonState()
         }
 
-        // Import Button
         binding.importButton.setOnClickListener {
             getContent.launch("audio/*")
         }
 
-        // Pair Button
         binding.pairButton.setOnClickListener {
-            try {
-                findBT()
-                openBT()
-            } catch ( exception: IOException ) { }
+            try { findBT(); openBT() } catch (e: IOException) { }
         }
 
-        // Close Button
         binding.closeButton.setOnClickListener {
-            try {
-                closeBT()
-            } catch ( exception: IOException ) { }
+            try { closeBT() } catch (e: IOException) { }
         }
 
-        // Fast Forward Button
+        // Fast-forward / slow-forward buttons: only restart playback if already playing,
+        // so pressing them while paused doesn't accidentally start the song.
         binding.imageButtonFF1.setOnTouchListener { _, event ->
-            when ( event.action ) {
-                MotionEvent.ACTION_DOWN -> {
-                    midiPlayer.tickTimeMultiplier = 1.5
-                    midiPlayer.isPlaying = !midiPlayer.isPlaying
-                    midiPlayer.isPlaying = !midiPlayer.isPlaying
-                }
-                MotionEvent.ACTION_UP -> {
-                    midiPlayer.tickTimeMultiplier = 1.0
-                    midiPlayer.isPlaying = !midiPlayer.isPlaying
-                    midiPlayer.isPlaying = !midiPlayer.isPlaying
-                }
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> restartWithMultiplier(1.5)
+                MotionEvent.ACTION_UP   -> restartWithMultiplier(1.0)
             }
             true
         }
 
-        // Fast Forward Button 2
         binding.imageButtonFF2.setOnTouchListener { _, event ->
-            when ( event.action ) {
-                MotionEvent.ACTION_DOWN -> {
-                    midiPlayer.tickTimeMultiplier = 2.0
-                    midiPlayer.isPlaying = !midiPlayer.isPlaying
-                    midiPlayer.isPlaying = !midiPlayer.isPlaying
-                }
-                MotionEvent.ACTION_UP -> {
-                    midiPlayer.tickTimeMultiplier = 1.0
-                    midiPlayer.isPlaying = !midiPlayer.isPlaying
-                    midiPlayer.isPlaying = !midiPlayer.isPlaying
-                }
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> restartWithMultiplier(2.0)
+                MotionEvent.ACTION_UP   -> restartWithMultiplier(1.0)
             }
             true
         }
 
-        // Slow Forward Button
         binding.imageButtonSS1.setOnTouchListener { _, event ->
-            when ( event.action ) {
-                MotionEvent.ACTION_DOWN -> {
-                    midiPlayer.tickTimeMultiplier = 0.75
-                    midiPlayer.isPlaying = !midiPlayer.isPlaying
-                    midiPlayer.isPlaying = !midiPlayer.isPlaying
-                }
-                MotionEvent.ACTION_UP -> {
-                    midiPlayer.tickTimeMultiplier = 1.0
-                    midiPlayer.isPlaying = !midiPlayer.isPlaying
-                    midiPlayer.isPlaying = !midiPlayer.isPlaying
-                }
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> restartWithMultiplier(0.75)
+                MotionEvent.ACTION_UP   -> restartWithMultiplier(1.0)
             }
             true
         }
 
-        // Slow Forward Button 2
         binding.imageButtonSS2.setOnTouchListener { _, event ->
-            when ( event.action ) {
-                MotionEvent.ACTION_DOWN -> {
-                    midiPlayer.tickTimeMultiplier = 0.5
-                    midiPlayer.isPlaying = !midiPlayer.isPlaying
-                    midiPlayer.isPlaying = !midiPlayer.isPlaying
-                }
-                MotionEvent.ACTION_UP -> {
-                    midiPlayer.tickTimeMultiplier = 1.0
-                    midiPlayer.isPlaying = !midiPlayer.isPlaying
-                    midiPlayer.isPlaying = !midiPlayer.isPlaying
-                }
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> restartWithMultiplier(0.5)
+                MotionEvent.ACTION_UP   -> restartWithMultiplier(1.0)
             }
             true
         }
 
-        // Loop Button
         binding.imageButtonLoop.setOnClickListener {
             midiPlayer.isLooping = !midiPlayer.isLooping
-            if ( midiPlayer.isLooping ) binding.textViewLooping.text = "Looping"
-            else binding.textViewLooping.text = "Not Looping"
+            binding.textViewLooping.text = if (midiPlayer.isLooping) "Looping" else "Not Looping"
         }
 
-        // Example of a call to a native method
         binding.textViewProgress.text = binding.seekBarSongProgress.progress.toString()
-
         midiRvAdapter.notifyDataSetChanged()
     }
 
-    fun saveMIDIFileList(midiFileList: ArrayList<MIDIFile>) {
-        val editor = sharedPreferences.edit()
-        val serializedList = midiFileList.map { Json.encodeToString(MIDIFile.serializer(), it) }
-        editor.putStringSet(MIDI_FILE_LIST_KEY, serializedList.toSet())
-        editor.apply()
+    private fun restartWithMultiplier(multiplier: Double) {
+        midiPlayer.tickTimeMultiplier = multiplier
+        if (midiPlayer.isPlaying) {
+            midiPlayer.isPlaying = false
+            midiPlayer.isPlaying = true
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        stopWorker = true
+        workerThread?.interrupt()
+        midiPlayer.isPlaying = false
+        try { mmOutputStream?.close() } catch (e: IOException) { }
+        try { mmInputStream?.close() } catch (e: IOException) { }
+        try { if (::bluetoothSocket.isInitialized) bluetoothSocket.close() } catch (e: IOException) { }
+    }
+
+    fun saveMIDIFileList(list: ArrayList<MIDIFile>) {
+        sharedPreferences.edit()
+            .putString(MIDI_FILE_LIST_KEY, Json.encodeToString(ListSerializer(MIDIFile.serializer()), list))
+            .apply()
     }
 
     private fun loadMIDIFileList(): ArrayList<MIDIFile> {
-        val midiFileList = ArrayList<MIDIFile>()
-        val serializedList = sharedPreferences.getStringSet(MIDI_FILE_LIST_KEY, null) ?: emptySet()
-        for (serializedString in serializedList) {
-            val midiFile = Json.decodeFromString<MIDIFile>(serializedString)
-            midiFileList.add(midiFile)
+        return try {
+            val json = sharedPreferences.getString(MIDI_FILE_LIST_KEY, null) ?: return ArrayList()
+            ArrayList(Json.decodeFromString(ListSerializer(MIDIFile.serializer()), json))
+        } catch (e: Exception) {
+            // ClassCastException if upgrading from old StringSet format, or malformed JSON —
+            // clear the stale entry so it doesn't crash on every subsequent launch.
+            sharedPreferences.edit().remove(MIDI_FILE_LIST_KEY).apply()
+            ArrayList()
         }
-        return midiFileList
     }
 
-    private val requestPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
-        isGranted ->
-            if ( isGranted ) {
-                Log.i("DEBUG", "Permission Granted!")
-            } else {
-                Log.i("DEBUG", "Permission Denied")
-            }
+    private val requestPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+        Log.i("DEBUG", if (isGranted) "Permission Granted!" else "Permission Denied")
     }
 
-    private fun findBT () {
-        if (ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.BLUETOOTH_CONNECT
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
+    private fun findBT() {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
             requestPermission.launch(Manifest.permission.BLUETOOTH_CONNECT)
-
             return
         }
 
-        bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
-        if ( bluetoothAdapter == null ) {
-            binding.myLabel.text = "No bluetooth adapter available"
-        }
+        val bm = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        bluetoothAdapter = bm.adapter
 
-        if ( !bluetoothAdapter.isEnabled) {
+        if (!bluetoothAdapter.isEnabled) {
             val enableBluetooth = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
             registerForResult.launch(enableBluetooth)
         }
 
-        val pairedDevices: Set<BluetoothDevice> = bluetoothAdapter.bondedDevices
-
-        for (device in pairedDevices) {
+        for (device in bluetoothAdapter.bondedDevices) {
             if (device.name == "ESP32test") {
                 bluetoothDevice = device
                 break
             }
         }
-
         binding.myLabel.text = "Bluetooth Device Found!"
     }
 
     @Throws(IOException::class)
     fun openBT() {
-        if (ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.BLUETOOTH_CONNECT
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
             requestPermission.launch(Manifest.permission.BLUETOOTH_CONNECT)
-
             return
         }
 
-        val uuid = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB") //Standard SerialPortService ID
+        val uuid = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
         bluetoothSocket = bluetoothDevice.createRfcommSocketToServiceRecord(uuid)
         bluetoothSocket.connect()
         mmOutputStream = bluetoothSocket.outputStream
@@ -320,13 +252,12 @@ class MainActivity : AppCompatActivity() {
         mmInputStream = bluetoothSocket.inputStream
 
         beginListenForData()
-
         binding.myLabel.text = "Bluetooth Opened"
     }
 
     private fun beginListenForData() {
-        val handler: Handler = Handler()
-        val delimiter: Byte = 10 //This is the ASCII code for a newline character
+        val handler = Handler(Looper.getMainLooper())
+        val delimiter: Byte = 10
 
         stopWorker = false
         readBufferPosition = 0
@@ -342,20 +273,15 @@ class MainActivity : AppCompatActivity() {
                             val b = packetBytes[i]
                             if (b == delimiter) {
                                 val encodedBytes = ByteArray(readBufferPosition)
-                                System.arraycopy(
-                                    readBuffer,
-                                    0,
-                                    encodedBytes,
-                                    0,
-                                    encodedBytes.size
-                                )
-                                val data =
-                                    String(encodedBytes, charset("US-ASCII"))
+                                System.arraycopy(readBuffer, 0, encodedBytes, 0, readBufferPosition)
+                                val data = String(encodedBytes, charset("US-ASCII"))
                                 readBufferPosition = 0
-
-                                handler.post(Runnable { binding.myLabel.text = data })
-                            } else {
+                                handler.post { binding.myLabel.text = data }
+                            } else if (readBufferPosition < readBuffer.size) {
                                 readBuffer[readBufferPosition++] = b
+                            } else {
+                                // Buffer overflow — reset rather than crash
+                                readBufferPosition = 0
                             }
                         }
                     }
@@ -364,37 +290,31 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-
         workerThread!!.start()
     }
 
-    @Throws(IOException::class)
-    fun sendData( message: ByteArray ) {
-        var msg: ByteArray = message
-        msg += '\n'.code.toByte()
+    fun sendData(message: ByteArray) {
+        val msg = message + '\n'.code.toByte()
         try {
-            if ( mmOutputStream != null ) mmOutputStream!!.write(msg)
+            mmOutputStream?.write(msg)
             Log.i("BRIGHTNESS CHANGE", msg.toString(Charsets.UTF_8))
         } catch (e: IOException) { }
     }
 
-    @Throws(IOException::class)
     fun closeBT() {
         stopWorker = true
-        mmOutputStream!!.close()
-        midiPlayer.mOutputStream!!.close()
-        mmInputStream!!.close()
-        bluetoothSocket.close()
+        try { mmOutputStream?.close() } catch (e: IOException) { }
+        try { mmInputStream?.close() } catch (e: IOException) { }
+        try { if (::bluetoothSocket.isInitialized) bluetoothSocket.close() } catch (e: IOException) { }
+        mmOutputStream = null
+        midiPlayer.mOutputStream = null
+        mmInputStream = null
         binding.myLabel.text = "Bluetooth Closed"
     }
 
-    private val registerForResult = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { _ ->
+    private val registerForResult = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { _ -> }
 
-    }
-
-    private fun updateButtonState () {
+    private fun updateButtonState() {
         if (midiPlayer.isPlaying) {
             binding.playButton.setImageResource(android.R.drawable.ic_media_pause)
         } else {
@@ -403,46 +323,29 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val getContent = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
-        // Get the name of the file
-        var fileName: String = ""
-        if ( uri != null ) {
-            val cursor: Cursor? = this.contentResolver.query(uri, null, null, null, null)
-            if ( cursor != null && cursor.moveToFirst() ) {
-                val displayNameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                fileName = cursor.getString(displayNameIndex)
-            }
-//            copyFileToInternalStorage(uri, fileName)
-            val parsedFile = midiPlayer.parseMIDIFile(uri, fileName)
-            if ( parsedFile != null ){
-//                serializeAndSave(this,fileName,parsedFile)
-                midiFileList.plusAssign(parsedFile)
-                midiRvAdapter.notifyDataSetChanged()
-            }
+        uri ?: return@registerForActivityResult
 
-//            midiPlayer.loadMIDIFile(uri)
-            saveMIDIFileList(midiFileList)
+        var fileName = ""
+        contentResolver.query(uri, null, null, null, null)?.use { cursor: Cursor ->
+            if (cursor.moveToFirst()) {
+                val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0) fileName = cursor.getString(idx)
+            }
         }
 
-        // Set the FileName text to the filename
-//        binding.textViewFileName.text = fileName
+        val name = fileName
+        // Parse on IO thread to avoid blocking the UI on large files
+        lifecycleScope.launch(Dispatchers.IO) {
+            val parsedFile = midiPlayer.parseMIDIFile(uri, name)
+            if (parsedFile != null) {
+                withContext(Dispatchers.Main) {
+                    midiFileList.add(parsedFile)
+                    midiRvAdapter.notifyDataSetChanged()
+                    saveMIDIFileList(midiFileList)
+                }
+            }
+        }
     }
-
-
-
-
-
-    /**
-     * A native method that is implemented by the 'myapplication' native library,
-     * which is packaged with this application.
-     */
-//    external fun stringFromJNI(): String
-//
-//    companion object {
-//        // Used to load the 'myapplication' library on application startup.
-//        init {
-//            System.loadLibrary("myapplication")
-//        }
-//    }
 }
 
 @RequiresApi(Build.VERSION_CODES.O)
@@ -451,9 +354,9 @@ class FileListAdapter(
     private val rvFileList: ArrayList<MIDIFile>,
     private val midiPlayer: MIDIPlayer,
     private val mainBinding: ActivityMainBinding,
-): RecyclerView.Adapter<FileListAdapter.ViewHolder>() {
+) : RecyclerView.Adapter<FileListAdapter.ViewHolder>() {
 
-    inner class ViewHolder ( val binding: RecyclerviewSingleItemBinding ) : RecyclerView.ViewHolder(binding.root)
+    inner class ViewHolder(val binding: RecyclerviewSingleItemBinding) : RecyclerView.ViewHolder(binding.root)
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
         val binding = RecyclerviewSingleItemBinding.inflate(LayoutInflater.from(parent.context), parent, false)
@@ -461,37 +364,22 @@ class FileListAdapter(
     }
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
-        with ( holder ) {
-            with ( rvFileList[position] ) {
+        with(holder) {
+            with(rvFileList[position]) {
                 binding.textViewFilename.text = this.name
                 binding.imageButtonUpload.setOnClickListener {
-                    if ( this.uriString != null ) {
-//                        val loadedMIDIFile = this.name?.let { it1 ->
-//                            deserializeAndLoad(context,
-//                                it1
-//                            )
-//                        }
-//                        if (loadedMIDIFile != null) {
-//                            midiPlayer.loadMIDIFile(loadedMIDIFile)
-//                        }
-                        midiPlayer.loadMIDIFile(this)
-                        mainBinding.seekBarSongProgress.max = midiPlayer.max.toInt()
-                        mainBinding.textViewFileName.text = this.name
-                    }
+                    midiPlayer.loadMIDIFile(this)
+                    mainBinding.seekBarSongProgress.max = midiPlayer.max.toInt()
+                    mainBinding.textViewFileName.text = this.name
                 }
-
                 binding.imageButtonDelete.setOnClickListener {
-                    if ( this.uriString != null ) {
-                        rvFileList.remove(this)
-                        (context as MainActivity).saveMIDIFileList(rvFileList)
-                        notifyDataSetChanged()
-                    }
+                    rvFileList.remove(this)
+                    (context as MainActivity).saveMIDIFileList(rvFileList)
+                    notifyDataSetChanged()
                 }
             }
         }
     }
 
-    override fun getItemCount(): Int {
-        return rvFileList.size
-    }
+    override fun getItemCount(): Int = rvFileList.size
 }
